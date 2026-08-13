@@ -1,6 +1,5 @@
 **README, It includes:
-** remove me
-
+≈
 - A full **Podman + Kind + Local Registry** setup guide  
 - The **HTTP push fix** (VM + host)  
 - All the **pitfalls we hit**  
