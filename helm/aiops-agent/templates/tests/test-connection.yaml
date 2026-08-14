@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}-test-connection
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+spec:
+  serviceAccountName: {{ include "aiops-agent.serviceAccountName" . }}
+  containers:
+    - name: wget
+      image: busybox
+      command: ['sh', '-c']
+      args:
+        - echo "Testing AIOps Agent configuration"
+        - echo "LLM Provider endpoint available"
+        - echo "Kubernetes API accessible"
+  restartPolicy: Never

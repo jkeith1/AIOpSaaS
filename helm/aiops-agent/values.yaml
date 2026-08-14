@@ -1,0 +1,127 @@
+# Default values for aiops-agent Helm chart
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: localhost:5001/aiops-agent
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: aiops-agent
+
+# LLM Provider Configuration
+llmProvider: "github-copilot"
+llmConfig:
+  # Provider type: github-copilot, openai, anthropic, bedrock
+  provider: "github-copilot"
+  # API key from secret (not baked in)
+  apiKeySecret:
+    name: aiops-secrets
+    key: llm-api-key
+  # Optional model override
+  model: ""
+  temperature: 0.7
+  maxTokens: 2048
+
+# GitHub Integration (for Copilot authentication)
+github:
+  token:
+    secret: aiops-secrets
+    key: github-token
+  copilot:
+    enabled: true
+    # Copilot API endpoint
+    apiEndpoint: "https://api.github.com/copilot"
+
+# Kubernetes cluster introspection
+kubernetes:
+  watchNamespaces:
+    - default
+    - kube-system
+    - aiops
+  rbac:
+    create: true
+    serviceAccountName: aiops-agent
+
+# Resource constraints
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Pod security settings
+podSecurityPolicy:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsReadOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+# Scheduling
+schedule:
+  enabled: true
+  # Cron interval for cluster analysis
+  interval: "*/5 * * * *"
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "json"
+
+# Liveness and readiness probes
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 60
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+# Node affinity
+affinity: {}
+
+# Tolerations for node taints
+tolerations: []
+
+# Node selector
+nodeSelector: {}
+
+# Labels for pod
+labels:
+  app: aiops-agent
+  version: "0.1.0"
+
+# Annotations for pod
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"

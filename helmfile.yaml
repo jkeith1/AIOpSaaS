@@ -1,0 +1,101 @@
+# Helmfile for AIOps Agent deployment
+# Platform-agnostic deployment using Helm values and secrets
+#
+# Usage:
+#   helmfile -e dev sync
+#   helmfile -e prod sync
+#
+# Secrets must be created before deployment:
+#   kubectl create secret generic aiops-secrets \
+#     --from-literal=github-token=$GITHUB_TOKEN \
+#     --from-literal=llm-api-key=$LLM_API_KEY
+
+releases:
+  - name: aiops-agent
+    namespace: aiops
+    createNamespace: true
+    chart: ./helm/aiops-agent
+    version: 0.1.0
+    
+    values:
+      - environment: &environment "{{ .Environment.Values.environment | default "dev" }}"
+      - logLevel: &logLevel "{{ .Environment.Values.logLevel | default "info" }}"
+      - replicaCount: 1
+      - image:
+          repository: localhost:5001/aiops-agent
+          tag: latest
+          pullPolicy: IfNotPresent
+      
+      # LLM Provider Configuration
+      - llmProvider: "{{ .Environment.Values.llmProvider | default "github-copilot" }}"
+      - llmConfig:
+          provider: "{{ .Environment.Values.llmProvider | default "github-copilot" }}"
+          # API key loaded from secret
+          apiKeySecret:
+            name: aiops-secrets
+            key: llm-api-key
+          # Optional: override model name
+          model: "{{ .Environment.Values.llmModel | default "" }}"
+      
+      # GitHub Integration (for Copilot)
+      - github:
+          token:
+            secret: aiops-secrets
+            key: github-token
+          # Copilot-specific endpoints
+          copilot:
+            enabled: true
+            # Copilot API endpoint (may vary by region/account)
+            apiEndpoint: "{{ .Environment.Values.githubCopilotEndpoint | default "https://api.github.com/copilot" }}"
+      
+      # Kubernetes cluster introspection
+      - kubernetes:
+          watchNamespaces:
+            - default
+            - kube-system
+            - aiops
+          rbac:
+            create: true
+            serviceAccountName: aiops-agent
+      
+      # Resource limits
+      - resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      
+      # Analysis schedule (CronJob)
+      - schedule:
+          enabled: true
+          # Run cluster analysis every 5 minutes
+          interval: "*/5 * * * *"
+      
+      # Logging
+      - logging:
+          level: *logLevel
+          format: json
+      
+      # Pod Security
+      - podSecurityPolicy:
+          enabled: true
+          runAsNonRoot: true
+          runAsUser: 10001
+
+envs:
+  dev:
+    values:
+      - environment: dev
+        logLevel: debug
+        llmProvider: github-copilot
+        replicaCount: 1
+  
+  prod:
+    values:
+      - environment: prod
+        logLevel: info
+        llmProvider: github-copilot
+        replicaCount: 3
+        githubCopilotEndpoint: "https://api.github.com/copilot"

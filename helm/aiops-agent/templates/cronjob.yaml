@@ -1,0 +1,95 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule.interval | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "aiops-agent.selectorLabels" . | nindent 12 }}
+          annotations:
+            prometheus.io/scrape: "true"
+        spec:
+          serviceAccountName: {{ include "aiops-agent.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: {{ .Values.podSecurityPolicy.runAsNonRoot }}
+            runAsUser: {{ .Values.podSecurityPolicy.runAsUser }}
+            fsReadOnlyRootFilesystem: {{ .Values.podSecurityPolicy.fsReadOnlyRootFilesystem }}
+          
+          containers:
+            - name: {{ .Chart.Name }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              
+              # Environment variables from ConfigMap
+              envFrom:
+                - configMapRef:
+                    name: {{ include "aiops-agent.fullname" . }}-config
+              
+              # Sensitive values from Secret
+              env:
+                # LLM API Key
+                - name: LLM_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.llmConfig.apiKeySecret.name }}
+                      key: {{ .Values.llmConfig.apiKeySecret.key }}
+                
+                # GitHub Token (for Copilot authentication)
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.github.token.secret }}
+                      key: {{ .Values.github.token.key }}
+                
+                # Pod metadata
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+              
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              
+              securityContext:
+                allowPrivilegeEscalation: {{ .Values.podSecurityPolicy.allowPrivilegeEscalation }}
+                readOnlyRootFilesystem: false
+                capabilities:
+                  drop:
+                    - ALL
+              
+              # Volume mounts for kubeconfig (if needed)
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

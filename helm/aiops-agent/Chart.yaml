@@ -1,0 +1,16 @@
+# Helm Chart for AIOps Agent
+# Provides templated Kubernetes deployment with secret management
+
+apiVersion: v2
+name: aiops-agent
+description: AI Operations Agent for Kubernetes cluster analysis
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: AIOps Team
+keywords:
+  - aiops
+  - kubernetes
+  - llm
+  - agent

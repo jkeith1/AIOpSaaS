@@ -1,0 +1,32 @@
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiops-agent.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops-agent.labels" . | nindent 4 }}
+data:
+  # LLM Provider configuration
+  LLM_PROVIDER: {{ .Values.llmConfig.provider | quote }}
+  {{- if .Values.llmConfig.model }}
+  LLM_MODEL: {{ .Values.llmConfig.model | quote }}
+  {{- end }}
+  LLM_TEMPERATURE: {{ .Values.llmConfig.temperature | quote }}
+  LLM_MAX_TOKENS: {{ .Values.llmConfig.maxTokens | quote }}
+  
+  # GitHub Copilot specific
+  {{- if .Values.github.copilot.enabled }}
+  GITHUB_COPILOT_ENABLED: "true"
+  GITHUB_COPILOT_ENDPOINT: {{ .Values.github.copilot.apiEndpoint | quote }}
+  {{- end }}
+  
+  # Logging
+  LOG_LEVEL: {{ .Values.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.logging.format | quote }}
+  
+  # Kubernetes cluster introspection
+  WATCH_NAMESPACES: {{ .Values.kubernetes.watchNamespaces | join "," | quote }}
+  
+  # Analysis schedule
+  ANALYSIS_SCHEDULE: {{ .Values.schedule.interval | quote }}
