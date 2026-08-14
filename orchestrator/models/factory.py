@@ -6,6 +6,7 @@ from typing import Type, Optional
 from .base import ModelProvider, ModelConfig
 from .openai_provider import OpenAIProvider
 from .claude_provider import ClaudeProvider
+from .github_copilot_provider import GitHubCopilotProvider
 
 
 class ModelProviderFactory:
@@ -14,15 +15,15 @@ class ModelProviderFactory:
     Automatically detects provider based on environment variables or explicit selection.
     
     Usage:
-        # Auto-detect from env (checks OPENAI_API_KEY, ANTHROPIC_API_KEY)
+        # Auto-detect from env (checks GITHUB_TOKEN, OPENAI_API_KEY, ANTHROPIC_API_KEY)
         provider = ModelProviderFactory.create()
         
         # Explicit provider
-        provider = ModelProviderFactory.create(provider="openai")
+        provider = ModelProviderFactory.create(provider="github-copilot")
         
         # Custom config
-        config = ModelConfig(api_key="...", model_name="gpt-4o")
-        provider = ModelProviderFactory.create(provider="openai", config=config)
+        config = ModelConfig(api_key="...", model_name="gpt-4-turbo")
+        provider = ModelProviderFactory.create(provider="github-copilot", config=config)
         
         # Register custom provider
         ModelProviderFactory.register_provider("bedrock", BedrockProvider)
@@ -30,6 +31,8 @@ class ModelProviderFactory:
     """
 
     _providers = {
+        "github-copilot": GitHubCopilotProvider,
+        "copilot": GitHubCopilotProvider,
         "openai": OpenAIProvider,
         "gpt": OpenAIProvider,
         "anthropic": ClaudeProvider,
@@ -47,10 +50,10 @@ class ModelProviderFactory:
         Priority for provider detection:
         1. Explicit 'provider' parameter
         2. LLM_PROVIDER environment variable
-        3. Auto-detect from API key env vars
+        3. Auto-detect from API key env vars (GitHub, OpenAI, Anthropic)
         
         Args:
-            provider: Provider name ('openai', 'claude', etc). If None, auto-detect.
+            provider: Provider name ('github-copilot', 'openai', 'claude', etc). If None, auto-detect.
             config: ModelConfig instance. If None, loads from environment.
             
         Returns:
@@ -64,11 +67,11 @@ class ModelProviderFactory:
             provider = ModelProviderFactory.create()
             
             # Explicit provider with auto-loaded config
-            provider = ModelProviderFactory.create(provider="openai")
+            provider = ModelProviderFactory.create(provider="github-copilot")
             
             # Full custom config
-            config = ModelConfig(api_key="sk-...", model_name="gpt-4o")
-            provider = ModelProviderFactory.create(provider="openai", config=config)
+            config = ModelConfig(api_key="ghp_...", model_name="gpt-4-turbo")
+            provider = ModelProviderFactory.create(provider="github-copilot", config=config)
         """
         if provider is None:
             provider = cls._detect_provider()
@@ -131,8 +134,9 @@ class ModelProviderFactory:
         
         Detection priority:
         1. Explicit LLM_PROVIDER env var
-        2. OPENAI_API_KEY → 'openai'
-        3. ANTHROPIC_API_KEY → 'anthropic'
+        2. GITHUB_TOKEN → 'github-copilot'
+        3. OPENAI_API_KEY → 'openai'
+        4. ANTHROPIC_API_KEY → 'anthropic'
         
         Returns:
             Provider name (lowercase)
@@ -145,6 +149,9 @@ class ModelProviderFactory:
             return os.getenv("LLM_PROVIDER")
         
         # Auto-detect from API keys (order matters - check most specific first)
+        # Prioritize GitHub Copilot if token is available
+        if os.getenv("GITHUB_TOKEN"):
+            return "github-copilot"
         if os.getenv("OPENAI_API_KEY"):
             return "openai"
         if os.getenv("ANTHROPIC_API_KEY"):
@@ -152,7 +159,8 @@ class ModelProviderFactory:
         
         raise ValueError(
             "Could not auto-detect LLM provider. Set one of:\n"
+            "  - GITHUB_TOKEN (detected as 'github-copilot') - easiest if you have GitHub Copilot\n"
             "  - OPENAI_API_KEY (detected as 'openai')\n"
             "  - ANTHROPIC_API_KEY (detected as 'anthropic')\n"
-            "  - LLM_PROVIDER (explicit: 'openai', 'claude', etc)\n"
+            "  - LLM_PROVIDER (explicit: 'github-copilot', 'openai', 'claude', etc)\n"
         )

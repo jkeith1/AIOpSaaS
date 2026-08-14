@@ -87,7 +87,7 @@ class ModelProvider(ABC):
         """Return the provider's model identifier.
         
         Returns:
-            Model name (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022')
+            Model name (e.g., 'gpt-4-turbo', 'claude-3-5-sonnet-20241022')
         """
         pass
 

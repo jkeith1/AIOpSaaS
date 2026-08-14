@@ -1,560 +1,515 @@
-**README, It includes:
-≈
-- A full **Podman + Kind + Local Registry** setup guide  
-- The **HTTP push fix** (VM + host)  
-- All the **pitfalls we hit**  
-- A **runbook** for debugging  
-- A **Mermaid architecture diagram** showing the “4th‑wall” layering  
-- AWS‑style diagramming conventions **without AWS branding**
+# AIOpSaaS - AI Operations Agent for Kubernetes
 
-Let’s get you a clean, production‑ready document.
+> Intelligent Kubernetes operations using LLMs (OpenAI, Claude, GitHub Copilot)
 
----
+![Python](https://img.shields.io/badge/python-3.9+-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Status](https://img.shields.io/badge/status-Beta-yellow)
 
-# **README — Local Kubernetes AIOps Agent Environment**
+## 🚀 Overview
 
-This document describes how to build and run a local Kubernetes environment using:
+AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLMs to analyze cluster health, diagnose issues, and suggest optimizations. It's designed as a **platform-agnostic**, **provider-agnostic** solution that works with any Kubernetes distribution (Kind, EKS, GKE, AKS, on-prem) and any LLM (GitHub Copilot via your subscription, OpenAI, Anthropic Claude, or custom providers).
 
-- **Podman** (macOS backend VM)
-- **Kind** (Kubernetes-in-Docker running inside Podman)
-- **Local container registry** (running as a Podman container)
-- **AIOps Agent** (running as a pod inside Kind)
-- **HTTP-based image push** from Podman → registry → Kind
+### Key Features
 
-This setup allows the AIOps Agent to introspect the Kind cluster from inside the cluster, even though everything is running inside Podman’s VM.
+✅ **Multi-LLM Support** — GitHub Copilot (recommended if you have subscription), OpenAI GPT-4, Claude 3.5, easy to extend  
+✅ **Zero Vendor Lock-in** — Add/swap providers with environment variables, no code changes  
+✅ **Kubernetes Native** — Runs as CronJob in any K8s cluster, reads actual cluster state via kubectl  
+✅ **GitOps Ready** — Helm + Helmfile deployment, works in CI/CD pipelines (GitLab Runner, GitHub Actions, etc)  
+✅ **Security First** — Non-root container, read-only RBAC, API keys in secrets, no sensitive data in logs  
+✅ **Production Hardened** — Structured logging, error handling, graceful timeouts, resource limits  
 
 ---
 
-# **1. Environment Overview**
+## 📋 Prerequisites
 
-Your environment has four nested layers:
+### For Local Development
+- Python 3.9+
+- `pip` and `virtualenv`
+- One of:
+  - **GitHub account with Copilot subscription** + Personal Access Token (PAT)
+  - **OpenAI API key** (ChatGPT)
+  - **Anthropic API key** (Claude)
 
-1. **macOS host**
-2. **Podman VM**
-3. **Kind cluster running inside Podman**
-4. **AIOps Agent pod running inside Kind**
-
-The agent analyzes the Kind cluster, which itself runs inside Podman.
+### For Kubernetes Deployment
+- Kubernetes 1.20+
+- Helm 3.0+
+- Helmfile (optional, for GitOps workflow)
 
 ---
 
-# **2. Architecture Diagram (Mermaid)**
+## 🏃 Quick Start
 
-This diagram uses cloud‑style shapes but avoids AWS branding.
+### Option 1: Local Development (Fastest)
 
-```mermaid
-flowchart TD
+#### With GitHub Copilot (easiest if you have GitHub subscription)
+```bash
+# 1. Clone and setup
+git clone https://github.com/jkeith1/AIOpSaaS.git
+cd AIOpSaaS
+python3 -m venv venv
+source venv/bin/activate
 
-    subgraph HOST["macOS Host"]
-        subgraph PODMAN["Podman VM"]
-            REG["Local Registry (HTTP)\nlocalhost:5001"]
-            subgraph KIND["Kind Cluster"]
-                CP["Control Plane Node (containerd)"]
-                AGENT["AIOps Agent Pod"]
-            end
-        end
-    end
+# 2. Install dependencies
+pip install -r requirements.txt
 
-    AGENT -->|"kubectl / API calls"| CP
-    PODMAN -->|"HTTP Push"| REG
-    REG -->|"Image Pull"| CP
+# 3. Set your GitHub token (Personal Access Token with 'copilot' scope)
+export GITHUB_TOKEN="ghp_..."
+
+# 4. Run it
+python -m orchestrator.main
 ```
 
-This visually communicates the “4th wall” layering:  
-**Podman → Kind → Pod → Kind API**.
+#### With OpenAI (ChatGPT)
+```bash
+export OPENAI_API_KEY="sk-..."
+python -m orchestrator.main
+```
 
----
+#### With Anthropic (Claude)
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+python -m orchestrator.main
+```
 
-# **3. Setup Instructions**
-
-## **3.1 Start Podman Machine**
+### Option 2: Docker (for testing in Kind cluster)
 
 ```bash
-podman machine init
-podman machine start
-```
-
----
-
-## **3.2 Create Local Registry (HTTP)**
-
-```bash
-podman run -d \
-  -p 5001:5000 \
-  --name registry \
-  registry:2
-```
-
-Verify:
-
-```bash
-curl http://localhost:5001/v2/
-```
-
-Expected:
-
-```
-{}
-```
-
----
-
-## **3.3 Mark Registry as Insecure (Host + VM)**
-
-### **On macOS host**
-
-Edit:
-
-```
-~/.config/containers/registries.conf
-```
-
-Add:
-
-```toml
-[[registry]]
-location = "localhost:5001"
-insecure = true
-```
-
-### **Inside Podman VM**
-
-```bash
-podman machine ssh
-sudo vi /etc/containers/registries.conf
-```
-
-Add the same block:
-
-```toml
-[[registry]]
-location = "localhost:5001"
-insecure = true
-```
-
-Restart VM:
-
-```bash
-podman machine stop
-podman machine start
-```
-
----
-
-## **3.4 Build and Push Image**
-
-### **Build**
-
-```bash
+# Build container
 podman build -t aiops-agent:latest .
-```
 
-### **Tag**
-
-```bash
+# Tag for local registry
 podman tag aiops-agent:latest localhost:5001/aiops-agent:latest
-```
 
-### **Push**
-
-```bash
+# Push to local registry
 podman push localhost:5001/aiops-agent:latest
+
+# Load into Kind
+kind load image-archive --name aiops <(podman save localhost:5001/aiops-agent:latest)
+```
+
+### Option 3: Kubernetes Deployment (Recommended for Production)
+
+See [Kubernetes Deployment](#kubernetes-deployment) section below.
+
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+
+**LLM Provider Selection** (auto-detected in priority order):
+```bash
+# 1. GitHub Copilot (recommended if you have GitHub subscription)
+export GITHUB_TOKEN="ghp_..."
+# Optional: override model (default: gpt-4-turbo)
+export GITHUB_COPILOT_MODEL="gpt-4-turbo"
+
+# 2. OpenAI
+export OPENAI_API_KEY="sk-..."
+export OPENAI_MODEL="gpt-4o"  # or gpt-4-turbo, gpt-3.5-turbo
+
+# 3. Anthropic Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+export CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # or claude-3-opus, claude-3-haiku
+
+# 4. Explicit provider selection (optional)
+export LLM_PROVIDER="github-copilot"  # github-copilot, openai, anthropic
+```
+
+**LLM Parameters**:
+```bash
+# Temperature (0-2): Lower = deterministic, Higher = creative
+export OPENAI_TEMPERATURE=0.7
+export CLAUDE_TEMPERATURE=0.7
+
+# Max tokens: Max output length
+export OPENAI_MAX_TOKENS=2048
+export CLAUDE_MAX_TOKENS=2048
 ```
 
 ---
 
-## **3.5 Create Kind Cluster**
+## 🐳 Kubernetes Deployment
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│         Your Kubernetes Cluster         │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  CronJob: aiops-agent             │  │
+│  │  ┌─────────────────────────────┐  │  │
+│  │  │ Container: aiops-agent      │  │  │
+│  │  │ Image: aiops-agent:latest   │  │  │
+│  │  │ RunAsUser: 10001 (non-root) │  │  │
+│  │  └─────────────────────────────┘  │  │
+│  │                                   │  │
+│  │  ServiceAccount: aiops-agent      │  │
+│  │  RBAC: ClusterRole (read-only)    │  │
+│  └───────────────────────────────────┘  │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  Secrets: aiops-secrets           │  │
+│  │  - llm-api-key (API key)          │  │
+│  │  - github-token (GitHub PAT)      │  │
+│  └───────────────────────────────────┘  │
+│                                         │
+└─────────────────────────────────────────┘
+        │                          ▲
+        │ Read cluster state       │ Send analysis reports
+        ▼                          │
+   kubectl API                 LLM API
+   (internal)            (OpenAI/Claude/GitHub)
+```
+
+### Deployment Methods
+
+#### Method 1: Helmfile (Recommended for GitOps)
 
 ```bash
-kind create cluster --name aiops
+# 1. Create namespace and secrets
+kubectl create namespace aiops
+kubectl create secret generic aiops-secrets \
+  --namespace aiops \
+  --from-literal=github-token="ghp_..." \
+  --from-literal=llm-api-key="ghp_..."  # Usually same as github-token for Copilot
+
+# 2. Deploy using helmfile
+helmfile -e dev sync
+
+# For production (3 replicas)
+helmfile -e prod sync
 ```
 
----
-
-## **3.6 Load Image Into Kind**
-
-Kind cannot see Podman images directly.  
-Use an archive:
+#### Method 2: Helm Only
 
 ```bash
-podman save -o aiops-agent.tar aiops-agent:latest
-kind load image-archive --name aiops aiops-agent.tar
+# Create namespace and secret
+kubectl create namespace aiops
+kubectl create secret generic aiops-secrets \
+  --namespace aiops \
+  --from-literal=github-token="ghp_..." \
+  --from-literal=llm-api-key="ghp_..."
+
+# Deploy with Helm
+helm install aiops-agent ./helm/aiops-agent \
+  --namespace aiops \
+  --set llmProvider=github-copilot
+```
+
+#### Method 3: kubectl (Direct YAML)
+
+```bash
+# Create namespace
+kubectl create namespace aiops
+
+# Create secrets
+kubectl create secret generic aiops-secrets \
+  --namespace aiops \
+  --from-literal=github-token="ghp_..." \
+  --from-literal=llm-api-key="ghp_..."
+
+# Apply YAML manifests
+kubectl apply -f kubernetes/
+```
+
+### Verify Deployment
+
+```bash
+# Check CronJob
+kubectl get cronjob -n aiops
+
+# View recent job runs
+kubectl get jobs -n aiops
+
+# Check pod logs
+kubectl logs -n aiops -l app=aiops-agent --tail=100
+
+# Trigger manual run (for testing)
+kubectl create job --from=cronjob/aiops-agent manual-run -n aiops
 ```
 
 ---
 
-## **3.7 Deploy Secret**
+## 📊 Analysis Features
+
+### 1. Cluster Status Analysis
+
+Analyzes overall cluster health including:
+- Node status and resource utilization
+- Pod distribution and health
+- Recent events and errors
+- Network and storage issues
+
+```python
+analysis = analyzer.analyze_cluster_status(cluster_info)
+```
+
+### 2. Pod Diagnostics
+
+Diagnoses specific pod issues:
+- Root cause analysis
+- Severity assessment
+- Remediation recommendations
+
+```python
+diagnosis = analyzer.diagnose_pod_issues(pod_info)
+```
+
+### 3. Optimization Suggestions
+
+Recommends cluster optimizations for:
+- Cost reduction
+- Performance improvement
+- Reliability enhancement
+
+```python
+suggestions = analyzer.suggest_optimizations(cluster_config)
+```
+
+---
+
+## 🔌 Adding New LLM Providers
+
+The architecture is designed for easy extensibility. To add a new provider (Bedrock, Cohere, Ollama, etc):
+
+### Step 1: Create Provider Class
+
+```python
+# orchestrator/models/my_provider.py
+from .base import ModelProvider, ModelConfig, Message
+
+class MyProvider(ModelProvider):
+    def validate_config(self, config: ModelConfig) -> bool:
+        # Validate configuration
+        return True
+    
+    def complete(self, messages: list[Message]) -> str:
+        # Call your LLM API
+        return response_text
+    
+    def get_model_name(self) -> str:
+        return self.config.model_name or "my-model"
+    
+    @staticmethod
+    def from_env() -> "MyProvider":
+        # Load from environment variables
+        return MyProvider(config)
+```
+
+### Step 2: Register Provider
+
+```python
+# In your code or orchestrator.main
+from orchestrator.models.factory import ModelProviderFactory
+from orchestrator.models.my_provider import MyProvider
+
+ModelProviderFactory.register_provider("myprovider", MyProvider)
+```
+
+### Step 3: Use It
+
+```bash
+export LLM_PROVIDER="myprovider"
+export MY_PROVIDER_API_KEY="..."
+python -m orchestrator.main
+```
+
+---
+
+## 🚀 Integration Examples
+
+### GitLab CI Pipeline
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: aiops-agent-secrets
-type: Opaque
-stringData:
-  CLAUDE_API_KEY: "spoof-key-123"
+analyze_cluster:
+  stage: analyze
+  image: python:3.11-slim
+  script:
+    - pip install -r requirements.txt
+    - export GITHUB_TOKEN="$GITHUB_TOKEN"
+    - python -m orchestrator.main
+  only:
+    - schedules  # Run on schedule
 ```
 
-Apply:
-
-```bash
-kubectl apply -f secret.yaml
-```
-
----
-
-## **3.8 Deploy AIOps Agent**
+### GitHub Actions Workflow
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aiops-agent
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: aiops-agent
-  template:
-    metadata:
-      labels:
-        app: aiops-agent
-    spec:
-      serviceAccountName: aiops-agent
-      containers:
-      - name: aiops-agent
-        image: localhost:5001/aiops-agent:latest
-        imagePullPolicy: Always
-        resources:
-          requests:
-            memory: "256Mi"
-          limits:
-            memory: "512Mi"
+name: AIOps Analysis
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Every 5 minutes
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m orchestrator.main
         env:
-        - name: CLAUDE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: aiops-agent-secrets
-              key: CLAUDE_API_KEY
-        - name: DEFAULT_NAMESPACE
-          value: "default"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Apply:
+---
+
+## 📝 Architecture
+
+### Model Provider Abstraction
+
+```
+┌─────────────────────────────────────────┐
+│     ModelProviderFactory                │
+│  (Auto-detects provider from env)       │
+└─────────────────────────────────────────┘
+                    │
+     ┌──────────────┼──────────────┬──────────────┐
+     ▼              ▼              ▼              ▼
+┌─────────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐
+│  GitHub     │ │ OpenAI   │ │ Anthropic│ │ Custom        │
+│  Copilot    │ │ Provider │ │ Provider │ │ Provider      │
+│  Provider   │ │          │ │          │ │               │
+└─────────────┘ └──────────┘ └──────────┘ └───────────────┘
+        │              │              │              │
+        └──────────────┴──────────────┴──────────────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+   ┌─────────────┐      ┌──────────────┐
+   │  Message    │      │ ModelConfig  │
+   │  (abstraction)     │              │
+   └─────────────┘      └──────────────┘
+        │
+        ▼
+   ┌──────────────────────┐
+   │ KubernetesAnalyzer   │
+   │ (LLM-agnostic)       │
+   └──────────────────────┘
+```
+
+---
+
+## 🔐 Security
+
+- **Container**: Runs as non-root user (uid 10001), read-only root filesystem
+- **RBAC**: Read-only ClusterRole, minimal permissions (get, list, watch)
+- **Secrets**: API keys stored in Kubernetes secrets, never in code/config
+- **Logs**: Structured JSON logging, no sensitive data logged
+- **Network**: TLS for all external API calls (GitHub, OpenAI, Anthropic)
+- **Pod Security**: SecurityContext enforces non-root, no privilege escalation
+
+---
+
+## 📈 Monitoring & Logging
+
+### View Logs
 
 ```bash
-kubectl apply -f deployment.yaml
+# Latest logs
+kubectl logs -n aiops -l app=aiops-agent -f
+
+# Specific job run
+kubectl logs -n aiops <pod-name>
+
+# Previous runs (last 10)
+kubectl logs -n aiops -l app=aiops-agent --tail=1000 --timestamps=true
 ```
 
----
+### Prometheus Metrics (Optional)
 
-# **4. Runbook — Common Pitfalls & Fixes**
-
-## **4.1 Podman tries HTTPS instead of HTTP**
-**Symptom:**
-
-```
-server gave HTTP response to HTTPS client
-```
-
-**Fix:**  
-Add insecure registry config to **host + VM**.
-
----
-
-## **4.2 Kind cannot load Podman images**
-**Symptom:**
-
-```
-image not present locally
-```
-
-**Fix:**
-
-```bash
-podman save -o image.tar image:tag
-kind load image-archive --name cluster image.tar
-```
-
----
-
-## **4.3 Kind control-plane container not running**
-**Symptom:**
-
-```
-failed to detect containerd snapshotter
-```
-
-**Fix:**  
-Recreate cluster:
-
-```bash
-kind delete cluster --name aiops
-kind create cluster --name aiops
-```
-
----
-
-## **4.4 kubectl inside container crashes (Go runtime panic)**
-**Symptom:**
-
-```
-lfstack.push invalid packing
-fatal error: lfstack.push
-```
-
-**Fix:**  
-Install kubectl inside the container:
-
-```Dockerfile
-USER root
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
-    && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/kubectl
-```
-
----
-
-## **4.5 Pod restarts with exit code 137**
-**Cause:** OOM kill.
-
-**Fix:** Add memory limits:
-
+The CronJob includes Prometheus scrape annotations:
 ```yaml
-resources:
-  requests:
-    memory: "256Mi"
-  limits:
-    memory: "512Mi"
+prometheus.io/scrape: "true"
+prometheus.io/port: "8080"
 ```
+
+Metrics available at `/metrics` endpoint (future enhancement).
 
 ---
 
-## **4.6 Deployment fails due to “funky characters”**
-**Cause:** Tabs in YAML.
+## 🛠️ Development
 
-**Fix:** Replace tabs with spaces.
+### Project Structure
+
+```
+AIOpSaaS/
+├── orchestrator/
+│   ├── models/
+│   │   ├── base.py                    # Abstract ModelProvider
+│   │   ├── github_copilot_provider.py # GitHub Copilot implementation
+│   │   ├── openai_provider.py         # OpenAI GPT implementation
+│   │   ├── claude_provider.py         # Anthropic Claude implementation
+│   │   ├── factory.py                 # Provider factory & auto-detection
+│   │   └── __init__.py
+│   ├── main.py                        # Main orchestrator & KubernetesAnalyzer
+│   └── __init__.py
+├── helm/
+│   └── aiops-agent/                   # Helm chart
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       └── templates/
+├── helmfile.yaml                      # Helmfile (GitOps)
+├── Containerfile                      # Podman/Docker build
+├── requirements.txt                   # Python dependencies
+└── README.md
+```
+
+### Running Tests
+
+```bash
+# (Tests TBD - contributions welcome!)
+python -m pytest tests/
+```
+
+### Contributing
+
+Contributions welcome! Areas to help:
+- Real Kubernetes introspection (kubectl calls)
+- Prometheus metrics exporter
+- Alert routing (Slack, PagerDuty, etc)
+- Additional LLM providers (Bedrock, Cohere, Ollama)
+- Unit & integration tests
 
 ---
 
-# **5. Summary**
+## ⚠️ Limitations
 
-This README gives you everything needed to:
-
-- Rebuild Podman + Kind + Registry  
-- Push images over HTTP  
-- Load images into Kind  
-- Deploy the AIOps Agent  
-- Avoid every pitfall we hit  
-- Understand the architecture visually  
-
-You now have a reproducible, documented environment.
-
-
-Here’s a clean, production‑ready **“Tear‑Down” section** you can drop directly into your README.  
-It fits the structure we already built, avoids tabs, and gives you a **bulletproof reset procedure** so you can always return to a clean slate.
-
-I’m also adding **Guided Links** so you can jump to deeper sections later if you want to expand the README.
+- **Real K8s integration**: Currently uses sample data. To read actual cluster state, implement kubectl client.
+- **Stateless analysis**: Each run is independent. Future: add history/trends.
+- **No remediation actions**: Currently suggests fixes. Future: auto-remediate (with approval gates).
+- **Minimal monitoring**: Logs work. Future: Prometheus/OpenTelemetry metrics.
 
 ---
 
-# 🧹 **6. Teardown & Reset Guide (Full Local Cleanup)**
+## 📄 License
 
-This section explains how to completely remove:
-
-- The **AIOps Agent**
-- The **Kind cluster**
-- The **local registry**
-- The **Podman VM**
-- Any leftover images, containers, or volumes
-
-This returns your machine to a pristine state so you can rebuild the environment from scratch.
+MIT License - See LICENSE file for details.
 
 ---
 
-## **6.1 Remove AIOps Agent Resources**
+## 🤝 Support & Questions
 
-Delete Deployment, ServiceAccount, RBAC, and Secret:
-
-```
-kubectl delete deployment aiops-agent
-kubectl delete secret aiops-agent-secrets
-kubectl delete serviceaccount aiops-agent
-kubectl delete clusterrole aiops-agent
-kubectl delete clusterrolebinding aiops-agent
-```
-
-If you want to wipe the entire namespace:
-
-```
-kubectl delete namespace default --force --grace-period=0
-```
-
-(Only do this in a disposable Kind cluster.)
+- **Issues**: GitHub Issues
+- **Discussions**: GitHub Discussions
+- **Docs**: See README.md and inline code comments
 
 ---
 
-## **6.2 Delete the Kind Cluster**
+## 🎯 Roadmap
 
-List clusters:
-
-```
-kind get clusters
-```
-
-Delete:
-
-```
-kind delete cluster --name aiops
-```
-
-This removes:
-
-- Control‑plane container  
-- Worker containers (if any)  
-- Containerd image store inside Kind  
-- All Kubernetes objects  
+- [ ] Real Kubernetes API introspection (kubectl client)
+- [ ] Prometheus metrics exporter
+- [ ] Alert routing (Slack, PagerDuty, OpsGenie)
+- [ ] Remediation actions (with approval)
+- [ ] Trend analysis & historical comparisons
+- [ ] Web UI for viewing analysis results
+- [ ] AWS/Azure/GCP cost optimization specific analysis
+- [ ] Integration with FluxCD/ArgoCD for GitOps alerts
 
 ---
 
-## **6.3 Stop & Remove Local Registry**
-
-Stop registry:
-
-```
-podman stop registry
-```
-
-Remove registry:
-
-```
-podman rm registry
-```
-
-Remove registry image (optional):
-
-```
-podman rmi registry:2
-```
-
----
-
-## **6.4 Remove Local Images (Optional)**
-
-If you want a clean Podman image store:
-
-```
-podman images
-podman rmi localhost:5001/aiops-agent:latest
-podman rmi localhost/aiops-agent:latest
-```
-
-Remove all unused images:
-
-```
-podman image prune -a
-```
-
----
-
-## **6.5 Stop & Remove Podman Machine**
-
-Stop VM:
-
-```
-podman machine stop
-```
-
-Remove VM:
-
-```
-podman machine rm
-```
-
-This deletes:
-
-- The Podman virtual machine  
-- All containers inside it  
-- All images inside it  
-- All registry configs inside the VM  
-
----
-
-## **6.6 Remove Registry Config (Host)**
-
-Edit:
-
-```
-~/.config/containers/registries.conf
-```
-
-Remove the block:
-
-```
-[[registry]]
-location = "localhost:5001"
-insecure = true
-```
-
----
-
-## **6.7 Remove Registry Config (Podman VM)**
-
-Enter VM:
-
-```
-podman machine ssh
-```
-
-Edit:
-
-```
-sudo vi /etc/containers/registries.conf
-```
-
-Remove the same block.
-
----
-
-## **6.8 Verify Everything Is Gone**
-
-### Podman:
-
-```
-podman ps -a
-podman images
-```
-
-### Kind:
-
-```
-kind get clusters
-```
-
-### Kubernetes:
-
-```
-kubectl config get-contexts
-```
-
-You should see no active Kind context.
-
----
-
-# 🧭 **Runbook: When to Tear Down vs. When to Fix**
-
-- Use **tear‑down** when Kind behaves strangely, containerd is corrupted, or the control‑plane container won’t start.
-- Use **partial cleanup** (registry + images) when image pushes/pulls behave incorrectly.
-- Use **full teardown** when you want a guaranteed clean environment.
-
----
-
-# 🧱 **Guided Links for README Navigation**
-
-- Rebuild Environment
-- Fix_HTTP_Registry_Issues
-- Reload_Image_into_Kind
-- Run_AIOps_Agent
-- Troubleshoot_OOM_Kills
-- View_Architecture_Diagram
-
+**Made with ❤️ for Kubernetes operators**

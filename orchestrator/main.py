@@ -1,17 +1,26 @@
-"""AIOps Agent Main Orchestrator.
+"""Updated AIOps Agent Main Orchestrator with GitHub Copilot support.
 
 Coordinates:
 - Kubernetes cluster introspection
-- LLM-based analysis and diagnostics
+- LLM-based analysis and diagnostics (supports GitHub Copilot, OpenAI, Claude)
 - Alert generation and routing
-- Multi-provider LLM support (OpenAI, Anthropic, etc)
+- Multi-provider LLM support
 
 Usage:
-    # Set your LLM provider via environment:
-    export OPENAI_API_KEY="sk-..."
-    # or
-    export ANTHROPIC_API_KEY="sk-ant-..."
+    # With GitHub Copilot (easiest - uses your GitHub subscription)
+    export GITHUB_TOKEN="ghp_..."
+    python -m orchestrator.main
     
+    # Or explicitly specify provider
+    export LLM_PROVIDER="github-copilot"
+    python -m orchestrator.main
+    
+    # Or use OpenAI
+    export OPENAI_API_KEY="sk-..."
+    python -m orchestrator.main
+    
+    # Or use Claude
+    export ANTHROPIC_API_KEY="sk-ant-..."
     python -m orchestrator.main
 """
 
@@ -41,7 +50,7 @@ class KubernetesAnalyzer:
         """Initialize analyzer with LLM provider.
         
         Args:
-            llm_provider: Configured ModelProvider instance (OpenAI, Claude, etc)
+            llm_provider: Configured ModelProvider instance (GitHub Copilot, OpenAI, Claude, etc)
         """
         self.llm = llm_provider
         logger.info(f"Initialized KubernetesAnalyzer with {self.llm.get_model_name()}")
@@ -193,14 +202,15 @@ def main():
         logger.error(f"Configuration error: {str(e)}")
         print(f"\n✗ Error: {str(e)}\n")
         print("Setup Instructions:")
+        print("\n  For GitHub Copilot (easiest - uses your GitHub subscription):")
+        print("    export GITHUB_TOKEN='ghp_...'")
+        print("    python -m orchestrator.main")
         print("\n  For OpenAI (ChatGPT):")
         print("    export OPENAI_API_KEY='sk-...'")
-        print("    # Optional: export OPENAI_MODEL='gpt-4o'  (default)")
         print("\n  For Anthropic (Claude):")
         print("    export ANTHROPIC_API_KEY='sk-ant-...'")
-        print("    # Optional: export CLAUDE_MODEL='claude-3-5-sonnet-20241022'  (default)")
         print("\n  Or explicitly specify provider:")
-        print("    export LLM_PROVIDER='openai'  # or 'claude'")
+        print("    export LLM_PROVIDER='github-copilot'  # or 'openai', 'claude'")
         print()
         return 1
         
