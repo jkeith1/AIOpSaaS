@@ -7,6 +7,7 @@ from .base import ModelProvider, ModelConfig
 from .openai_provider import OpenAIProvider
 from .claude_provider import ClaudeProvider
 from .github_copilot_provider import GitHubCopilotProvider
+from .copilot_sdk_provider import CopilotSDKProvider
 
 
 class ModelProviderFactory:
@@ -19,11 +20,11 @@ class ModelProviderFactory:
         provider = ModelProviderFactory.create()
         
         # Explicit provider
-        provider = ModelProviderFactory.create(provider="github-copilot")
+        provider = ModelProviderFactory.create(provider="copilot-sdk")
         
         # Custom config
-        config = ModelConfig(api_key="...", model_name="gpt-4-turbo")
-        provider = ModelProviderFactory.create(provider="github-copilot", config=config)
+        config = ModelConfig(api_key="...", model_name="gpt-4")
+        provider = ModelProviderFactory.create(provider="copilot-sdk", config=config)
         
         # Register custom provider
         ModelProviderFactory.register_provider("bedrock", BedrockProvider)
@@ -33,6 +34,8 @@ class ModelProviderFactory:
     _providers = {
         "github-copilot": GitHubCopilotProvider,
         "copilot": GitHubCopilotProvider,
+        "copilot-sdk": CopilotSDKProvider,
+        "github-copilot-sdk": CopilotSDKProvider,
         "openai": OpenAIProvider,
         "gpt": OpenAIProvider,
         "anthropic": ClaudeProvider,
@@ -53,7 +56,7 @@ class ModelProviderFactory:
         3. Auto-detect from API key env vars (GitHub, OpenAI, Anthropic)
         
         Args:
-            provider: Provider name ('github-copilot', 'openai', 'claude', etc). If None, auto-detect.
+            provider: Provider name ('copilot-sdk', 'openai', 'claude', etc). If None, auto-detect.
             config: ModelConfig instance. If None, loads from environment.
             
         Returns:
@@ -67,11 +70,11 @@ class ModelProviderFactory:
             provider = ModelProviderFactory.create()
             
             # Explicit provider with auto-loaded config
-            provider = ModelProviderFactory.create(provider="github-copilot")
+            provider = ModelProviderFactory.create(provider="copilot-sdk")
             
             # Full custom config
-            config = ModelConfig(api_key="ghp_...", model_name="gpt-4-turbo")
-            provider = ModelProviderFactory.create(provider="github-copilot", config=config)
+            config = ModelConfig(api_key="ghp_...", model_name="gpt-4")
+            provider = ModelProviderFactory.create(provider="copilot-sdk", config=config)
         """
         if provider is None:
             provider = cls._detect_provider()
@@ -134,7 +137,7 @@ class ModelProviderFactory:
         
         Detection priority:
         1. Explicit LLM_PROVIDER env var
-        2. GITHUB_TOKEN → 'github-copilot'
+        2. GITHUB_TOKEN → 'copilot-sdk' (official SDK)
         3. OPENAI_API_KEY → 'openai'
         4. ANTHROPIC_API_KEY → 'anthropic'
         
@@ -149,9 +152,9 @@ class ModelProviderFactory:
             return os.getenv("LLM_PROVIDER")
         
         # Auto-detect from API keys (order matters - check most specific first)
-        # Prioritize GitHub Copilot if token is available
+        # Prioritize Copilot SDK if token is available
         if os.getenv("GITHUB_TOKEN"):
-            return "github-copilot"
+            return "copilot-sdk"
         if os.getenv("OPENAI_API_KEY"):
             return "openai"
         if os.getenv("ANTHROPIC_API_KEY"):
@@ -159,8 +162,8 @@ class ModelProviderFactory:
         
         raise ValueError(
             "Could not auto-detect LLM provider. Set one of:\n"
-            "  - GITHUB_TOKEN (detected as 'github-copilot') - easiest if you have GitHub Copilot\n"
+            "  - GITHUB_TOKEN (detected as 'copilot-sdk') - uses official GitHub Copilot SDK\n"
             "  - OPENAI_API_KEY (detected as 'openai')\n"
             "  - ANTHROPIC_API_KEY (detected as 'anthropic')\n"
-            "  - LLM_PROVIDER (explicit: 'github-copilot', 'openai', 'claude', etc)\n"
+            "  - LLM_PROVIDER (explicit: 'copilot-sdk', 'openai', 'claude', etc)\n"
         )
