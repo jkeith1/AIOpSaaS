@@ -24,7 +24,6 @@ spec:
           securityContext:
             runAsNonRoot: {{ .Values.podSecurityPolicy.runAsNonRoot }}
             runAsUser: {{ .Values.podSecurityPolicy.runAsUser }}
-            fsReadOnlyRootFilesystem: {{ .Values.podSecurityPolicy.fsReadOnlyRootFilesystem }}
           
           containers:
             - name: {{ .Chart.Name }}
@@ -67,7 +66,7 @@ spec:
               
               securityContext:
                 allowPrivilegeEscalation: {{ .Values.podSecurityPolicy.allowPrivilegeEscalation }}
-                readOnlyRootFilesystem: false
+                readOnlyRootFilesystem: {{ .Values.podSecurityPolicy.fsReadOnlyRootFilesystem }}
                 capabilities:
                   drop:
                     - ALL
