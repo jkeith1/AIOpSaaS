@@ -6,7 +6,7 @@
 
 ## 🚀 Overview
 
-AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLMs to analyze cluster health, diagnose issues, and suggest optimizations. It's designed as a **platform-agnostic**, **provider-agnostic** solution that works with any Kubernetes distribution (Kind, EKS, GKE, AKS, on-prem) and any LLM (GitHub Copilot via your subscription, OpenAI, Anthropic Claude, or custom providers).
+AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLMs to analyze cluster health, diagnose issues, and suggest optimizations. It's designed as a **platform-agnostic**, **zero vendor lock-in** system that works with GitHub Copilot, OpenAI GPT-4, Claude 3.5, and more.
 
 ### Key Features
 
@@ -112,7 +112,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # or claude-3-opus, claude-3-haiku
 
 # 4. Explicit provider selection (optional)
-export LLM_PROVIDER="github-copilot"  # github-copilot, openai, anthropic
+export LLM_PROVIDER="copilot-sdk"  # copilot-sdk, openai, anthropic
 ```
 
 **LLM Parameters**:
@@ -194,7 +194,7 @@ kubectl create secret generic aiops-secrets \
 # Deploy with Helm
 helm install aiops-agent ./helm/aiops-agent \
   --namespace aiops \
-  --set llmProvider=github-copilot
+  --set llmProvider=copilot-sdk
 ```
 
 #### Method 3: kubectl (Direct YAML)
@@ -372,7 +372,7 @@ jobs:
 ┌─────────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐
 │  GitHub     │ │ OpenAI   │ │ Anthropic│ │ Custom        │
 │  Copilot    │ │ Provider │ │ Provider │ │ Provider      │
-│  Provider   │ │          │ │          │ │               │
+│  SDK        │ │          │ │          │ │               │
 └─────────────┘ └──────────┘ └──────────┘ └───────────────┘
         │              │              │              │
         └──────────────┴──────────────┴──────────────┘
@@ -441,6 +441,7 @@ AIOpSaaS/
 │   ├── models/
 │   │   ├── base.py                    # Abstract ModelProvider
 │   │   ├── github_copilot_provider.py # GitHub Copilot implementation
+│   │   ├── copilot_sdk_provider.py    # Official Copilot SDK implementation
 │   │   ├── openai_provider.py         # OpenAI GPT implementation
 │   │   ├── claude_provider.py         # Anthropic Claude implementation
 │   │   ├── factory.py                 # Provider factory & auto-detection
@@ -455,6 +456,7 @@ AIOpSaaS/
 ├── helmfile.yaml                      # Helmfile (GitOps)
 ├── Containerfile                      # Podman/Docker build
 ├── requirements.txt                   # Python dependencies
+├── SESSION_SUMMARY.md                 # Session bookmark for continuing work
 └── README.md
 ```
 
@@ -473,6 +475,55 @@ Contributions welcome! Areas to help:
 - Alert routing (Slack, PagerDuty, etc)
 - Additional LLM providers (Bedrock, Cohere, Ollama)
 - Unit & integration tests
+
+---
+
+## 🏁 Local Development Shutdown
+
+When you're done with local development, shut down resources to avoid burning system resources:
+
+### Quick Shutdown (Preserves venv)
+
+```bash
+# Deactivate Python virtual environment
+deactivate
+
+# Delete Kind cluster (removes all containers, services, etc.)
+kind delete cluster --name aiops
+
+# Stop Podman registry
+podman stop registry
+
+# Verify everything is stopped
+kind get clusters
+podman ps
+```
+
+### Full Cleanup (Removes everything)
+
+```bash
+# Deactivate and remove venv
+deactivate
+rm -rf venv/
+
+# Delete Kind cluster
+kind delete cluster --name aiops
+
+# Stop and remove registry container
+podman stop registry
+podman rm registry
+
+# Verify cleanup
+kind get clusters
+podman ps
+```
+
+### Notes
+
+- **Python venv**: Safe to keep if you plan to continue work soon (saves reinstall time). Takes ~200MB disk space.
+- **Kind cluster**: Safely deleted. Can be recreated anytime with `kind create cluster --name aiops`.
+- **Podman registry**: Can be recreated if needed. Images remain in Podman.
+- **SESSION_SUMMARY.md**: Keep in repo for quick reference when resuming work.
 
 ---
 
