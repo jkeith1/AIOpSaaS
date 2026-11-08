@@ -15,12 +15,19 @@ rules:
       - events
       - services
       - configmaps
-      - secrets
       - namespaces
+      - serviceaccounts
       - persistentvolumes
       - persistentvolumeclaims
     verbs: ["get", "list", "watch"]
   
+  {{- if .Values.kubernetes.rbac.allowSecretsRead }}
+  # Secret contents reach a third-party LLM API - opt in deliberately.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  {{- end }}
+
   # Read workload resources
   - apiGroups: ["apps"]
     resources:
@@ -50,10 +57,11 @@ rules:
       - horizontalpodautoscalers
     verbs: ["get", "list", "watch"]
   
-  # Network policies
+  # Networking
   - apiGroups: ["networking.k8s.io"]
     resources:
       - networkpolicies
+      - ingresses
     verbs: ["get", "list", "watch"]
 
 ---

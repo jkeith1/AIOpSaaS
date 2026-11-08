@@ -1,16 +1,17 @@
 # AIOpSaaS - AI Operations Agent for Kubernetes
 
-> Intelligent Kubernetes operations using LLMs (OpenAI, Claude, GitHub Copilot)
+> Intelligent Kubernetes operations using LLMs (Claude, OpenAI, GitHub Copilot)
 
 ![Python](https://img.shields.io/badge/python-3.9+-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Status](https://img.shields.io/badge/status-Beta-yellow)
 
 ## 🚀 Overview
 
-AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLMs to analyze cluster health, diagnose issues, and suggest optimizations. It's designed as a **platform-agnostic**, **zero vendor lock-in** system that works with GitHub Copilot, OpenAI GPT-4, Claude 3.5, and more.
+AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLMs to analyze cluster health, diagnose issues, and suggest optimizations. It's designed as a **platform-agnostic**, **zero vendor lock-in** system that works with Anthropic Claude (default), OpenAI, GitHub Copilot, and more.
 
 ### Key Features
 
-✅ **Multi-LLM Support** — GitHub Copilot (recommended if you have subscription), OpenAI GPT-4, Claude 3.5, easy to extend  
+✅ **Multi-LLM Support** — Anthropic Claude (default), Claude Agent SDK (Claude drives kubectl itself), OpenAI, GitHub Copilot; easy to extend  
+✅ **Lazy Provider Loading** — A missing optional SDK disables only that provider, never the whole agent  
 ✅ **Zero Vendor Lock-in** — Add/swap providers with environment variables, no code changes  
 ✅ **Kubernetes Native** — Runs as CronJob in any K8s cluster, reads actual cluster state via kubectl  
 ✅ **GitOps Ready** — Helm + Helmfile deployment, works in CI/CD pipelines (GitLab Runner, GitHub Actions, etc)  
@@ -25,9 +26,9 @@ AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLM
 - Python 3.9+
 - `pip` and `virtualenv`
 - One of:
-  - **GitHub account with Copilot subscription** + Personal Access Token (PAT)
+  - **Anthropic API key** (Claude) — the default provider
   - **OpenAI API key** (ChatGPT)
-  - **Anthropic API key** (Claude)
+  - **GitHub account with Copilot subscription** + Personal Access Token (PAT)
 
 ### For Kubernetes Deployment
 - Kubernetes 1.20+
@@ -40,7 +41,7 @@ AIOpSaaS is a production-ready Kubernetes operations agent that leverages AI/LLM
 
 ### Option 1: Local Development (Fastest)
 
-#### With GitHub Copilot (easiest if you have GitHub subscription)
+#### With Anthropic Claude (default)
 ```bash
 # 1. Clone and setup
 git clone https://github.com/jkeith1/AIOpSaaS.git
@@ -51,22 +52,28 @@ source venv/bin/activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set your GitHub token (Personal Access Token with 'copilot' scope)
-export GITHUB_TOKEN="ghp_..."
+# 3. Set your Anthropic API key
+export ANTHROPIC_API_KEY="sk-ant-..."
 
-# 4. Run it
-python -m orchestrator.main
+# 4. Triage a namespace
+python -m orchestrator.main --namespace default
+
+# See exactly what would be sent to the model, without spending tokens
+python -m orchestrator.main --namespace default --dry-run
+```
+
+#### With the Claude Agent SDK (Claude calls kubectl itself)
+```bash
+pip install claude-agent-sdk     # also needs Node.js + the Claude Code CLI
+export ANTHROPIC_API_KEY="sk-ant-..."
+export LLM_PROVIDER="claude-agent"
+python -m orchestrator.main --namespace default
 ```
 
 #### With OpenAI (ChatGPT)
 ```bash
+pip install -r requirements-optional.txt
 export OPENAI_API_KEY="sk-..."
-python -m orchestrator.main
-```
-
-#### With Anthropic (Claude)
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
 python -m orchestrator.main
 ```
 
@@ -98,33 +105,56 @@ See [Kubernetes Deployment](#kubernetes-deployment) section below.
 
 **LLM Provider Selection** (auto-detected in priority order):
 ```bash
-# 1. GitHub Copilot (recommended if you have GitHub subscription)
-export GITHUB_TOKEN="ghp_..."
-# Optional: override model (default: gpt-4-turbo)
-export GITHUB_COPILOT_MODEL="gpt-4-turbo"
+# 1. Anthropic Claude (default)
+export ANTHROPIC_API_KEY="sk-ant-..."
+# Optional model override. Aliases opus/sonnet/haiku are expanded for you.
+export CLAUDE_MODEL="claude-sonnet-5"   # or claude-opus-5, claude-haiku-4-5-20251001
 
 # 2. OpenAI
 export OPENAI_API_KEY="sk-..."
-export OPENAI_MODEL="gpt-4o"  # or gpt-4-turbo, gpt-3.5-turbo
+export OPENAI_MODEL="gpt-4o"
 
-# 3. Anthropic Claude
-export ANTHROPIC_API_KEY="sk-ant-..."
-export CLAUDE_MODEL="claude-3-5-sonnet-20241022"  # or claude-3-opus, claude-3-haiku
+# 3. GitHub Copilot
+export GITHUB_TOKEN="ghp_..."
 
-# 4. Explicit provider selection (optional)
-export LLM_PROVIDER="copilot-sdk"  # copilot-sdk, openai, anthropic
+# 4. Explicit provider selection (always wins over auto-detection)
+export LLM_PROVIDER="claude"   # claude, claude-agent, openai, copilot-sdk
 ```
+
+**Generic `LLM_*` variables.** The Helm chart injects `LLM_API_KEY`, `LLM_MODEL`,
+`LLM_TEMPERATURE`, `LLM_MAX_TOKENS` and `LLM_TIMEOUT` rather than per-provider
+names, so one Secret and one ConfigMap work for every provider. Provider-specific
+names (`ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, ...) take precedence when both are set.
 
 **LLM Parameters**:
 ```bash
-# Temperature (0-2): Lower = deterministic, Higher = creative
+# Temperature: lower = deterministic. Triage defaults to 0.2, not 0.7 -
+# you want the same evidence to produce the same diagnosis.
+export CLAUDE_TEMPERATURE=0.2
 export OPENAI_TEMPERATURE=0.7
-export CLAUDE_TEMPERATURE=0.7
 
-# Max tokens: Max output length
-export OPENAI_MAX_TOKENS=2048
-export CLAUDE_MAX_TOKENS=2048
+# Max output tokens
+export CLAUDE_MAX_TOKENS=4096
+
+# Max tool-use round trips (claude-agent provider only)
+export AGENT_MAX_TURNS=20
 ```
+
+---
+
+## 🧪 Testing
+
+The test suite runs fully offline — the `anthropic` SDK is stubbed and a fake
+`kubectl` on `PATH` serves canned cluster data, so no cluster and no API key are
+needed:
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+It covers the provider (system-prompt handling, retries, env precedence),
+the factory (lazy loading, detection order), the collectors and summarizers,
+and the full triage path end to end.
 
 ---
 
@@ -159,7 +189,7 @@ export CLAUDE_MAX_TOKENS=2048
         │ Read cluster state       │ Send analysis reports
         ▼                          │
    kubectl API                 LLM API
-   (internal)            (OpenAI/Claude/GitHub)
+   (internal)            (Claude/OpenAI/GitHub)
 ```
 
 ### Deployment Methods
@@ -171,8 +201,7 @@ export CLAUDE_MAX_TOKENS=2048
 kubectl create namespace aiops
 kubectl create secret generic aiops-secrets \
   --namespace aiops \
-  --from-literal=github-token="ghp_..." \
-  --from-literal=llm-api-key="ghp_..."  # Usually same as github-token for Copilot
+  --from-literal=llm-api-key="sk-ant-..."   # your Anthropic API key
 
 # 2. Deploy using helmfile
 helmfile -e dev sync
@@ -188,13 +217,17 @@ helmfile -e prod sync
 kubectl create namespace aiops
 kubectl create secret generic aiops-secrets \
   --namespace aiops \
-  --from-literal=github-token="ghp_..." \
-  --from-literal=llm-api-key="ghp_..."
+  --from-literal=llm-api-key="sk-ant-..."
 
 # Deploy with Helm
-helm install aiops-agent ./helm/aiops-agent \
+helm upgrade --install aiops-agent ./helm/aiops-agent \
   --namespace aiops \
-  --set llmProvider=copilot-sdk
+  --set llmConfig.provider=claude \
+  --set llmConfig.model=claude-sonnet-5
+
+# Or let the script do build + push + secret + deploy in one go:
+#   export ANTHROPIC_API_KEY="sk-ant-..."
+#   ./scripts/build-and-deploy.sh
 ```
 
 #### Method 3: kubectl (Direct YAML)

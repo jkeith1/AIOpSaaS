@@ -7,51 +7,65 @@ metadata:
     {{- include "aiops-agent.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.schedule.interval | quote }}
+  concurrencyPolicy: {{ .Values.schedule.concurrencyPolicy | default "Forbid" }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
+  {{- if not .Values.schedule.enabled }}
+  suspend: true
+  {{- end }}
   jobTemplate:
     spec:
       backoffLimit: 2
+      activeDeadlineSeconds: {{ .Values.schedule.activeDeadlineSeconds | default 900 }}
       template:
         metadata:
           labels:
             {{- include "aiops-agent.selectorLabels" . | nindent 12 }}
-          annotations:
-            prometheus.io/scrape: "true"
         spec:
           serviceAccountName: {{ include "aiops-agent.serviceAccountName" . }}
           restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: {{ .Values.podSecurityPolicy.runAsNonRoot }}
             runAsUser: {{ .Values.podSecurityPolicy.runAsUser }}
-          
+            fsGroup: {{ .Values.podSecurityPolicy.runAsUser }}
+
           containers:
             - name: {{ .Chart.Name }}
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              
-              # Environment variables from ConfigMap
+
+              # Non-sensitive configuration
               envFrom:
                 - configMapRef:
                     name: {{ include "aiops-agent.fullname" . }}-config
-              
-              # Sensitive values from Secret
+
               env:
-                # LLM API Key
+                # The LLM API key. Exposed under both names so the same secret
+                # works whether the provider reads ANTHROPIC_API_KEY (claude,
+                # claude-agent) or the generic LLM_API_KEY.
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.llmConfig.apiKeySecret.name }}
+                      key: {{ .Values.llmConfig.apiKeySecret.key }}
                 - name: LLM_API_KEY
                   valueFrom:
                     secretKeyRef:
                       name: {{ .Values.llmConfig.apiKeySecret.name }}
                       key: {{ .Values.llmConfig.apiKeySecret.key }}
-                
-                # GitHub Token (for Copilot authentication)
+
+                {{- if .Values.github.copilot.enabled }}
+                # Only mounted when the Copilot provider is actually enabled.
+                # Referencing a missing secret key here would block the pod
+                # from ever starting.
                 - name: GITHUB_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: {{ .Values.github.token.secret }}
                       key: {{ .Values.github.token.key }}
-                
-                # Pod metadata
+                      optional: true
+                {{- end }}
+
                 - name: POD_NAME
                   valueFrom:
                     fieldRef:
@@ -60,26 +74,31 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-              
+
               resources:
                 {{- toYaml .Values.resources | nindent 16 }}
-              
+
               securityContext:
                 allowPrivilegeEscalation: {{ .Values.podSecurityPolicy.allowPrivilegeEscalation }}
                 readOnlyRootFilesystem: {{ .Values.podSecurityPolicy.fsReadOnlyRootFilesystem }}
                 capabilities:
                   drop:
                     - ALL
-              
-              # Volume mounts for kubeconfig (if needed)
+
+              # With a read-only root filesystem, kubectl still needs somewhere
+              # to write its discovery cache, and HOME must be writable.
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
-          
+                - name: home
+                  mountPath: /home/aiops
+
           volumes:
             - name: tmp
               emptyDir: {}
-          
+            - name: home
+              emptyDir: {}
+
           {{- with .Values.nodeSelector }}
           nodeSelector:
             {{- toYaml . | nindent 12 }}

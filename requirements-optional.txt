@@ -1,0 +1,19 @@
+# Optional providers. None of these are needed for the default 'claude'
+# provider; the factory imports provider modules lazily, so an absent package
+# only disables that one provider.
+#
+#   pip install -r requirements-optional.txt
+
+# OpenAI / GPT provider
+openai>=1.3.0
+
+# Claude Agent SDK provider ('claude-agent') - Claude calls the kubectl tools
+# itself. Also requires Node.js and the Claude Code CLI on PATH; build the
+# image with --build-arg INSTALL_AGENT_SDK=true to get both.
+claude-agent-sdk>=0.1.0
+
+# GitHub Copilot SDK provider ('copilot-sdk').
+# NOTE: kept registered but NOT installed by default - this distribution could
+# not be resolved from PyPI, which is what broke the image build. Install it
+# manually from whatever source actually provides it if you want that provider.
+# github-copilot-sdk>=0.1.0

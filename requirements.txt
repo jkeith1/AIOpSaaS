@@ -1,5 +1,6 @@
+# Core runtime
 requests>=2.31.0
 pyyaml>=6.0
-openai>=1.3.0
-anthropic>=0.7.0
-github-copilot-sdk>=0.1.0
+
+# Default LLM provider: Anthropic Claude (Messages API)
+anthropic>=0.40.0

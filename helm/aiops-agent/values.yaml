@@ -1,6 +1,4 @@
-# Default values for aiops-agent Helm chart
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
+# Default values for the aiops-agent Helm chart.
 
 replicaCount: 1
 
@@ -18,41 +16,67 @@ serviceAccount:
   annotations: {}
   name: aiops-agent
 
-# LLM Provider Configuration
-llmProvider: "github-copilot"
+# ---------------------------------------------------------------------------
+# LLM provider
+# ---------------------------------------------------------------------------
+# provider options:
+#   claude        - Anthropic Messages API (default; only needs `anthropic`)
+#   claude-agent  - Claude Agent SDK; Claude calls the kubectl tools itself.
+#                   Requires an image built with --build-arg INSTALL_AGENT_SDK=true
+#   openai        - OpenAI
+#   copilot-sdk   - GitHub Copilot SDK (registered, not installed by default)
 llmConfig:
-  # Provider type: github-copilot, openai, anthropic, bedrock
-  provider: "github-copilot"
-  # API key from secret (not baked in)
+  provider: "claude"
+
+  # Where the API key comes from. Create it with:
+  #   kubectl create secret generic aiops-secrets \
+  #     --from-literal=llm-api-key="sk-ant-..." -n aiops
   apiKeySecret:
     name: aiops-secrets
     key: llm-api-key
-  # Optional model override
-  model: ""
-  temperature: 0.7
-  maxTokens: 2048
 
-# GitHub Integration (for Copilot authentication)
+  # Empty = the provider's own default (currently claude-sonnet-5).
+  # Other options: claude-opus-5, claude-haiku-4-5-20251001
+  model: "claude-sonnet-5"
+  # Low temperature: triage should be reproducible, not creative.
+  temperature: 0.2
+  maxTokens: 4096
+  # Seconds to wait on a single API call.
+  timeout: 120
+  # Max tool-use round trips for the claude-agent provider.
+  agentMaxTurns: 20
+
+# Kept for backwards compatibility with older value files.
+llmProvider: "claude"
+
+# ---------------------------------------------------------------------------
+# GitHub Copilot (disabled - kept so the provider stays switchable)
+# ---------------------------------------------------------------------------
 github:
+  copilot:
+    enabled: false
+    apiEndpoint: "https://api.github.com/copilot"
   token:
     secret: aiops-secrets
     key: github-token
-  copilot:
-    enabled: true
-    # Copilot API endpoint
-    apiEndpoint: "https://api.github.com/copilot"
 
-# Kubernetes cluster introspection
+# ---------------------------------------------------------------------------
+# Kubernetes introspection
+# ---------------------------------------------------------------------------
 kubernetes:
   watchNamespaces:
     - default
-    - kube-system
     - aiops
+  # Cap on how many unhealthy pods get an individual deep-dive per namespace.
+  maxPodsPerNamespace: 5
   rbac:
     create: true
     serviceAccountName: aiops-agent
+    # Cluster-wide Secret read access. Off by default: this agent sends what it
+    # reads to a third-party LLM API, and nothing in the triage path needs
+    # Secret contents.
+    allowSecretsRead: false
 
-# Resource constraints
 resources:
   limits:
     cpu: 500m
@@ -61,67 +85,41 @@ resources:
     cpu: 250m
     memory: 256Mi
 
-# Pod security settings
 podSecurityPolicy:
   enabled: true
   runAsNonRoot: true
   runAsUser: 10001
-  fsReadOnlyRootFilesystem: false
+  fsReadOnlyRootFilesystem: true
   allowPrivilegeEscalation: false
 
-# Scheduling
 schedule:
   enabled: true
-  # Cron interval for cluster analysis
   interval: "*/5 * * * *"
+  # Skip a run if the previous one is still going.
+  concurrencyPolicy: Forbid
+  # Hard stop for a single run, so a hung kubectl cannot pile up jobs.
+  activeDeadlineSeconds: 900
 
-# Logging configuration
 logging:
   level: "info"
   format: "json"
 
-# Liveness and readiness probes
-livenessProbe:
-  enabled: true
-  initialDelaySeconds: 30
-  periodSeconds: 60
-  timeoutSeconds: 5
-  failureThreshold: 3
-
-readinessProbe:
-  enabled: true
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
-
-# Pod disruption budget
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
 
-# Autoscaling
 autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 80
 
-# Node affinity
 affinity: {}
-
-# Tolerations for node taints
 tolerations: []
-
-# Node selector
 nodeSelector: {}
 
-# Labels for pod
 labels:
   app: aiops-agent
   version: "0.1.0"
 
-# Annotations for pod
-annotations:
-  prometheus.io/scrape: "true"
-  prometheus.io/port: "8080"
+annotations: {}

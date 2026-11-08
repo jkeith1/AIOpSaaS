@@ -1,222 +1,183 @@
-"""Updated AIOps Agent Main Orchestrator with GitHub Copilot support.
+"""AIOps Agent entrypoint.
 
-Coordinates:
-- Kubernetes cluster introspection
-- LLM-based analysis and diagnostics (supports GitHub Copilot, OpenAI, Claude)
-- Alert generation and routing
-- Multi-provider LLM support
+Runs LLM-backed triage against real cluster state. Designed to be run as a
+Kubernetes CronJob (analyse every watched namespace, log the findings) but
+equally usable ad hoc from a shell.
 
 Usage:
-    # With GitHub Copilot (easiest - uses your GitHub subscription)
-    export GITHUB_TOKEN="ghp_..."
+    # Triage every namespace in WATCH_NAMESPACES (the CronJob default)
     python -m orchestrator.main
-    
-    # Or explicitly specify provider
-    export LLM_PROVIDER="github-copilot"
-    python -m orchestrator.main
-    
-    # Or use OpenAI
-    export OPENAI_API_KEY="sk-..."
-    python -m orchestrator.main
-    
-    # Or use Claude
-    export ANTHROPIC_API_KEY="sk-ant-..."
-    python -m orchestrator.main
+
+    # One namespace
+    python -m orchestrator.main --namespace my-app
+
+    # One pod
+    python -m orchestrator.main --namespace my-app --pod api-7d9f-x2k1
+
+    # Every unhealthy pod in a namespace, individually
+    python -m orchestrator.main --namespace my-app --unhealthy
+
+    # Collect and print context without calling the LLM (no tokens spent)
+    python -m orchestrator.main --namespace my-app --dry-run
+
+Provider selection (see orchestrator/models/factory.py):
+    export ANTHROPIC_API_KEY="sk-ant-..."     # -> claude (Messages API)
+    export LLM_PROVIDER="claude-agent"        # -> Claude Agent SDK tool loop
 """
 
+import argparse
+import json
+import logging
 import os
 import sys
-from typing import List
-import logging
+from typing import Any, Dict, List
 
-from .models import Message, Role
-from .models.factory import ModelProviderFactory
+from .agent import ClusterTroubleshooterAgent
+from .config import Config
+from .tools import k8s
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aiops")
 
 
-class KubernetesAnalyzer:
-    """Analyzes Kubernetes cluster health and generates insights using LLM.
-    
-    This is provider-agnostic - uses any LLM via the ModelProvider interface.
-    """
-
-    def __init__(self, llm_provider):
-        """Initialize analyzer with LLM provider.
-        
-        Args:
-            llm_provider: Configured ModelProvider instance (GitHub Copilot, OpenAI, Claude, etc)
-        """
-        self.llm = llm_provider
-        logger.info(f"Initialized KubernetesAnalyzer with {self.llm.get_model_name()}")
-
-    def analyze_cluster_status(self, cluster_info: dict) -> str:
-        """Analyze cluster status and generate insights.
-        
-        Args:
-            cluster_info: Dictionary with cluster metrics and events
-            
-        Returns:
-            AI-generated analysis and recommendations
-        """
-        system_prompt = (
-            "You are an expert Kubernetes Operations (AIOps) agent. "
-            "Analyze the provided cluster information and identify issues, "
-            "trends, and recommend remediation steps. Be concise but thorough. "
-            "Format your response with clear sections: Status, Issues, Resources, Actions."
-        )
-        
-        cluster_data = f"""Cluster Information:
-{cluster_info}
-
-Provide analysis in this format:
-1. **Current Health Status**: Overall cluster health
-2. **Critical Issues**: Any blocking problems
-3. **Resource Utilization**: CPU, Memory, Storage summary
-4. **Recommended Actions**: Ordered by priority
-"""
-        
-        messages = [
-            Message(role=Role.SYSTEM, content=system_prompt),
-            Message(role=Role.USER, content=cluster_data),
-        ]
-        
-        logger.info(f"Sending cluster analysis request to {self.llm.get_model_name()}")
-        response = self.llm.complete(messages)
-        logger.info(f"Received analysis ({len(response)} chars)")
-        
-        return response
-
-    def diagnose_pod_issues(self, pod_info: dict) -> str:
-        """Diagnose issues with a specific pod.
-        
-        Args:
-            pod_info: Pod details including logs and events
-            
-        Returns:
-            AI-generated diagnosis and remediation steps
-        """
-        messages = [
-            Message(
-                role=Role.SYSTEM,
-                content=(
-                    "You are a Kubernetes debugging expert. "
-                    "Analyze pod information and provide structured diagnosis."
-                ),
-            ),
-            Message(
-                role=Role.USER,
-                content=(
-                    f"Pod Issue Analysis:\n{pod_info}\n\n"
-                    "Provide: 1) Root cause, 2) Severity level, 3) Remediation steps"
-                ),
-            ),
-        ]
-        
-        logger.info(f"Sending pod diagnosis request to {self.llm.get_model_name()}")
-        response = self.llm.complete(messages)
-        
-        return response
-
-    def suggest_optimizations(self, cluster_config: dict) -> str:
-        """Suggest cluster optimizations based on current configuration.
-        
-        Args:
-            cluster_config: Cluster configuration details
-            
-        Returns:
-            AI-generated optimization recommendations
-        """
-        messages = [
-            Message(
-                role=Role.SYSTEM,
-                content=(
-                    "You are a Kubernetes architect. "
-                    "Review the cluster configuration and suggest optimizations "
-                    "for cost, performance, and reliability."
-                ),
-            ),
-            Message(
-                role=Role.USER,
-                content=f"Cluster Configuration:\n{cluster_config}",
-            ),
-        ]
-        
-        return self.llm.complete(messages)
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    # The SDKs are chatty at DEBUG and drown out our own output.
+    for noisy in ("httpx", "httpcore", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def main():
-    """Main orchestrator entrypoint."""
-    logger.info("="*60)
-    logger.info("Starting AIOps Agent Orchestrator")
-    logger.info("="*60)
-    
-    try:
-        # Create LLM provider from environment
-        logger.info("Initializing LLM provider...")
-        llm_provider = ModelProviderFactory.create()
-        logger.info(f"✓ Using {llm_provider.get_model_name()}")
-        
-        # Initialize analyzer
-        analyzer = KubernetesAnalyzer(llm_provider)
-        
-        # Example 1: Analyze cluster status
-        sample_cluster_info = {
-            "nodes": 3,
-            "pods_running": 45,
-            "pods_pending": 2,
-            "pods_failed": 1,
-            "memory_usage": "65%",
-            "cpu_usage": "42%",
-            "disk_usage": "78%",
-            "recent_events": [
-                "Node memory pressure detected",
-                "ImagePullBackOff on 2 pods (redis-cache-*)",
-                "CrashLoopBackOff on 1 pod (worker-3)",
-            ],
-            "network_errors": 124,
-            "node_conditions": {
-                "node-1": "Ready",
-                "node-2": "Ready",
-                "node-3": "NotReady (memory pressure)",
-            },
-        }
-        
-        logger.info("\nRunning cluster analysis...")
-        analysis = analyzer.analyze_cluster_status(sample_cluster_info)
-        print("\n" + "="*70)
-        print("CLUSTER ANALYSIS REPORT")
-        print("="*70)
-        print(analysis)
-        print("="*70 + "\n")
-        
-        logger.info("✓ Orchestrator completed successfully")
-        return 0
-        
-    except ValueError as e:
-        logger.error(f"Configuration error: {str(e)}")
-        print(f"\n✗ Error: {str(e)}\n")
-        print("Setup Instructions:")
-        print("\n  For GitHub Copilot (easiest - uses your GitHub subscription):")
-        print("    export GITHUB_TOKEN='ghp_...'")
-        print("    python -m orchestrator.main")
-        print("\n  For OpenAI (ChatGPT):")
-        print("    export OPENAI_API_KEY='sk-...'")
-        print("\n  For Anthropic (Claude):")
-        print("    export ANTHROPIC_API_KEY='sk-ant-...'")
-        print("\n  Or explicitly specify provider:")
-        print("    export LLM_PROVIDER='github-copilot'  # or 'openai', 'claude'")
+def _print_report(result: Dict[str, Any]) -> None:
+    """Render one triage result as readable text."""
+    target = result.get("pod") or result.get("namespace", "?")
+    print("\n" + "=" * 72)
+    print(f"TRIAGE: {target}")
+    if result.get("severity") and result["severity"] != "unknown":
+        print(f"Severity: {result['severity'].upper()}")
+    print("=" * 72)
+
+    print(f"\n{result.get('summary') or '(no summary returned)'}\n")
+
+    for label, key in (
+        ("Root causes", "root_causes"),
+        ("Evidence", "evidence"),
+        ("Recommended fixes", "recommended_fixes"),
+        ("Affected objects", "affected_objects"),
+    ):
+        items = result.get(key) or []
+        if not items:
+            continue
+        print(f"{label}:")
+        for item in items:
+            if isinstance(item, dict):
+                item = json.dumps(item)
+            print(f"  - {item}")
         print()
+
+    if result.get("parse_error"):
+        print("NOTE: the model did not return valid JSON; summary holds raw output.")
+    print(f"[model: {result.get('model') or 'none'}]")
+
+
+def _run(args: argparse.Namespace, config: Config) -> int:
+    """Execute the requested triage and return a process exit code."""
+    if args.dry_run:
+        # No provider, no tokens - just show what would be sent.
+        if args.pod:
+            print(k8s.collect_pod_context(args.namespace, args.pod))
+        else:
+            print(k8s.collect_namespace_context(args.namespace))
+        return 0
+
+    agent = ClusterTroubleshooterAgent(config=config)
+    if not agent.has_llm:
+        logger.error(
+            "No LLM provider could be initialised. Set ANTHROPIC_API_KEY "
+            "(or LLM_API_KEY) and optionally LLM_PROVIDER."
+        )
         return 1
-        
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
-        print(f"\n✗ Unexpected error: {str(e)}\n")
+
+    logger.info("Using %s", agent.provider.get_model_name())
+    results: List[Dict[str, Any]] = []
+
+    if args.pod:
+        results.append(agent.triage_pod(args.namespace, args.pod))
+    elif args.unhealthy:
+        results.extend(
+            agent.triage_unhealthy_pods(
+                args.namespace, limit=config.max_pods_per_namespace
+            )
+        )
+        if not results:
+            logger.info("No unhealthy pods found in '%s'", args.namespace)
+    else:
+        namespaces = [args.namespace] if args.namespace else config.watch_namespaces
+        for namespace in namespaces:
+            try:
+                results.append(agent.triage_namespace(namespace))
+            except k8s.KubectlError as exc:
+                logger.error("Skipping namespace '%s': %s", namespace, exc)
+
+    if args.json:
+        print(json.dumps(results, indent=2, default=str))
+    else:
+        for result in results:
+            _print_report(result)
+
+    return 0
+
+
+def main(argv: List[str] = None) -> int:
+    """Main orchestrator entrypoint."""
+    parser = argparse.ArgumentParser(
+        prog="orchestrator",
+        description="LLM-backed Kubernetes triage agent.",
+    )
+    parser.add_argument(
+        "-n", "--namespace",
+        help="Namespace to triage. Defaults to every namespace in WATCH_NAMESPACES.",
+    )
+    parser.add_argument("-p", "--pod", help="Triage a single pod (requires --namespace).")
+    parser.add_argument(
+        "--unhealthy",
+        action="store_true",
+        help="Triage each unhealthy pod in the namespace individually.",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the collected cluster context without calling the LLM.",
+    )
+    args = parser.parse_args(argv)
+
+    config = Config()
+    _configure_logging(config.log_level)
+
+    if (args.pod or args.unhealthy) and not args.namespace:
+        args.namespace = config.default_namespace
+        logger.info("No --namespace given, using '%s'", args.namespace)
+    if args.dry_run and not args.namespace:
+        args.namespace = config.default_namespace
+
+    logger.info("AIOps agent starting (provider=%s)", config.llm_provider)
+
+    try:
+        return _run(args, config)
+    except k8s.KubectlError as exc:
+        logger.error("Kubernetes access failed: %s", exc)
+        logger.error(
+            "In-cluster this means the ServiceAccount lacks RBAC or kubectl "
+            "cannot reach the API server; locally, check your kubecontext."
+        )
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:  # noqa: BLE001 - top-level guard
+        logger.error("Unexpected error: %s", exc, exc_info=True)
         return 1
 
 

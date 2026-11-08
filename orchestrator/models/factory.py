@@ -1,46 +1,92 @@
-"""Factory for creating model providers based on configuration."""
+"""Factory for creating model providers based on configuration.
 
+Providers are resolved lazily: a provider module is only imported when that
+provider is actually requested. This matters because each provider module
+imports a third-party SDK that may not be installed in a given image — with
+eager imports, a missing `openai` or `github-copilot-sdk` wheel would break
+*every* provider, including Claude.
+"""
+
+import importlib
+import logging
 import os
-from typing import Type, Optional
+from typing import Dict, Optional, Type, Union
 
 from .base import ModelProvider, ModelConfig
-from .openai_provider import OpenAIProvider
-from .claude_provider import ClaudeProvider
-from .github_copilot_provider import GitHubCopilotProvider
-from .copilot_sdk_provider import CopilotSDKProvider
+
+logger = logging.getLogger(__name__)
+
+# Provider name -> "module:ClassName", imported on demand.
+_LAZY_PROVIDERS: Dict[str, str] = {
+    # Anthropic Claude via the Messages API (default).
+    "claude": ".claude_provider:ClaudeProvider",
+    "anthropic": ".claude_provider:ClaudeProvider",
+    # Anthropic Claude via the Claude Agent SDK (agentic tool-use loop).
+    "claude-agent": ".claude_agent_provider:ClaudeAgentProvider",
+    "claude-agent-sdk": ".claude_agent_provider:ClaudeAgentProvider",
+    "claude-code": ".claude_agent_provider:ClaudeAgentProvider",
+    # OpenAI.
+    "openai": ".openai_provider:OpenAIProvider",
+    "gpt": ".openai_provider:OpenAIProvider",
+    # GitHub Copilot (legacy REST attempt + official SDK).
+    "github-copilot": ".github_copilot_provider:GitHubCopilotProvider",
+    "copilot": ".github_copilot_provider:GitHubCopilotProvider",
+    "copilot-sdk": ".copilot_sdk_provider:CopilotSDKProvider",
+    "github-copilot-sdk": ".copilot_sdk_provider:CopilotSDKProvider",
+}
 
 
 class ModelProviderFactory:
     """Factory for instantiating LLM providers.
-    
-    Automatically detects provider based on environment variables or explicit selection.
-    
+
     Usage:
-        # Auto-detect from env (checks GITHUB_TOKEN, OPENAI_API_KEY, ANTHROPIC_API_KEY)
+        # Auto-detect from env (LLM_PROVIDER, then available API keys)
         provider = ModelProviderFactory.create()
-        
+
         # Explicit provider
-        provider = ModelProviderFactory.create(provider="copilot-sdk")
-        
+        provider = ModelProviderFactory.create(provider="claude")
+
         # Custom config
-        config = ModelConfig(api_key="...", model_name="gpt-4")
-        provider = ModelProviderFactory.create(provider="copilot-sdk", config=config)
-        
+        config = ModelConfig(api_key="...", model_name="claude-opus-5")
+        provider = ModelProviderFactory.create(provider="claude", config=config)
+
         # Register custom provider
         ModelProviderFactory.register_provider("bedrock", BedrockProvider)
-        provider = ModelProviderFactory.create(provider="bedrock")
     """
 
-    _providers = {
-        "github-copilot": GitHubCopilotProvider,
-        "copilot": GitHubCopilotProvider,
-        "copilot-sdk": CopilotSDKProvider,
-        "github-copilot-sdk": CopilotSDKProvider,
-        "openai": OpenAIProvider,
-        "gpt": OpenAIProvider,
-        "anthropic": ClaudeProvider,
-        "claude": ClaudeProvider,
-    }
+    #: Explicitly registered classes take precedence over the lazy table.
+    _providers: Dict[str, Type[ModelProvider]] = {}
+
+    @classmethod
+    def available_providers(cls) -> list:
+        """Return every provider name this factory knows about."""
+        return sorted(set(_LAZY_PROVIDERS) | set(cls._providers))
+
+    @classmethod
+    def _resolve(cls, name: str) -> Type[ModelProvider]:
+        """Resolve a provider name to a class, importing it on demand."""
+        if name in cls._providers:
+            return cls._providers[name]
+
+        target = _LAZY_PROVIDERS.get(name)
+        if target is None:
+            raise ValueError(
+                f"Unknown provider: '{name}'. "
+                f"Available: {', '.join(cls.available_providers())}"
+            )
+
+        module_path, class_name = target.split(":")
+        try:
+            module = importlib.import_module(module_path, package=__package__)
+        except ImportError as exc:
+            raise ImportError(
+                f"Provider '{name}' is registered but its dependencies are not "
+                f"installed: {exc}"
+            ) from exc
+
+        provider_class = getattr(module, class_name)
+        cls._providers[name] = provider_class
+        return provider_class
 
     @classmethod
     def create(
@@ -49,54 +95,33 @@ class ModelProviderFactory:
         config: Optional[ModelConfig] = None,
     ) -> ModelProvider:
         """Create a model provider instance.
-        
+
         Priority for provider detection:
-        1. Explicit 'provider' parameter
-        2. LLM_PROVIDER environment variable
-        3. Auto-detect from API key env vars (GitHub, OpenAI, Anthropic)
-        
+          1. Explicit ``provider`` argument
+          2. ``LLM_PROVIDER`` environment variable
+          3. Auto-detect from whichever API key is present
+
         Args:
-            provider: Provider name ('copilot-sdk', 'openai', 'claude', etc). If None, auto-detect.
-            config: ModelConfig instance. If None, loads from environment.
-            
+            provider: Provider name ('claude', 'claude-agent', 'openai', ...).
+            config: Explicit config. If None, the provider loads from env.
+
         Returns:
-            Configured ModelProvider instance
-            
-        Raises:
-            ValueError: If provider not found or config invalid
-            
-        Examples:
-            # Auto-detect and load from environment
-            provider = ModelProviderFactory.create()
-            
-            # Explicit provider with auto-loaded config
-            provider = ModelProviderFactory.create(provider="copilot-sdk")
-            
-            # Full custom config
-            config = ModelConfig(api_key="ghp_...", model_name="gpt-4")
-            provider = ModelProviderFactory.create(provider="copilot-sdk", config=config)
+            A configured ModelProvider instance.
         """
         if provider is None:
             provider = cls._detect_provider()
-        
-        provider_lower = provider.lower()
-        if provider_lower not in cls._providers:
-            available = ", ".join(sorted(set(cls._providers.keys())))
-            raise ValueError(
-                f"Unknown provider: '{provider}'. Available: {available}"
-            )
-        
-        provider_class = cls._providers[provider_lower]
-        
+
+        name = provider.strip().lower()
+        provider_class = cls._resolve(name)
+        logger.info("Selected LLM provider: %s (%s)", name, provider_class.__name__)
+
         if config is None:
-            # Try to load from environment using provider's from_env() if available
-            if hasattr(provider_class, "from_env"):
-                return provider_class.from_env()
-            else:
+            if not hasattr(provider_class, "from_env"):
                 raise ValueError(
                     f"No configuration provided and {provider} has no from_env() method"
                 )
-        
+            return provider_class.from_env()
+
         return provider_class(config)
 
     @classmethod
@@ -105,26 +130,7 @@ class ModelProviderFactory:
         name: str,
         provider_class: Type[ModelProvider],
     ) -> None:
-        """Register a custom provider.
-        
-        This allows extending the factory with new LLM providers without modifying
-        the factory code. Simply implement ModelProvider and register it.
-        
-        Args:
-            name: Provider identifier (e.g., 'cohere', 'bedrock', 'ollama')
-            provider_class: Class that inherits from ModelProvider
-            
-        Raises:
-            TypeError: If provider_class doesn't inherit from ModelProvider
-            
-        Examples:
-            # Register Bedrock provider
-            class BedrockProvider(ModelProvider):
-                ...
-            
-            ModelProviderFactory.register_provider("bedrock", BedrockProvider)
-            provider = ModelProviderFactory.create(provider="bedrock")
-        """
+        """Register a custom provider class under ``name``."""
         if not issubclass(provider_class, ModelProvider):
             raise TypeError(
                 f"{provider_class.__name__} must inherit from ModelProvider"
@@ -133,37 +139,29 @@ class ModelProviderFactory:
 
     @staticmethod
     def _detect_provider() -> str:
-        """Auto-detect provider from environment variables.
-        
+        """Auto-detect the provider from environment variables.
+
         Detection priority:
-        1. Explicit LLM_PROVIDER env var
-        2. GITHUB_TOKEN → 'copilot-sdk' (official SDK)
-        3. OPENAI_API_KEY → 'openai'
-        4. ANTHROPIC_API_KEY → 'anthropic'
-        
-        Returns:
-            Provider name (lowercase)
-            
-        Raises:
-            ValueError: If no provider can be detected
+          1. LLM_PROVIDER (what the Helm chart sets — always wins)
+          2. ANTHROPIC_API_KEY / CLAUDE_API_KEY -> 'claude'
+          3. OPENAI_API_KEY                     -> 'openai'
+          4. GITHUB_TOKEN                       -> 'copilot-sdk'
         """
-        # Explicit provider specification takes priority
-        if os.getenv("LLM_PROVIDER"):
-            return os.getenv("LLM_PROVIDER")
-        
-        # Auto-detect from API keys (order matters - check most specific first)
-        # Prioritize Copilot SDK if token is available
-        if os.getenv("GITHUB_TOKEN"):
-            return "copilot-sdk"
+        explicit = os.getenv("LLM_PROVIDER")
+        if explicit and explicit.strip():
+            return explicit.strip()
+
+        if os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"):
+            return "claude"
         if os.getenv("OPENAI_API_KEY"):
             return "openai"
-        if os.getenv("ANTHROPIC_API_KEY"):
-            return "anthropic"
-        
+        if os.getenv("GITHUB_TOKEN"):
+            return "copilot-sdk"
+
         raise ValueError(
-            "Could not auto-detect LLM provider. Set one of:\n"
-            "  - GITHUB_TOKEN (detected as 'copilot-sdk') - uses official GitHub Copilot SDK\n"
-            "  - OPENAI_API_KEY (detected as 'openai')\n"
-            "  - ANTHROPIC_API_KEY (detected as 'anthropic')\n"
-            "  - LLM_PROVIDER (explicit: 'copilot-sdk', 'openai', 'claude', etc)\n"
+            "Could not auto-detect an LLM provider. Set one of:\n"
+            "  - ANTHROPIC_API_KEY  (detected as 'claude')\n"
+            "  - OPENAI_API_KEY     (detected as 'openai')\n"
+            "  - GITHUB_TOKEN       (detected as 'copilot-sdk')\n"
+            "  - LLM_PROVIDER       (explicit: 'claude', 'claude-agent', 'openai', ...)\n"
         )

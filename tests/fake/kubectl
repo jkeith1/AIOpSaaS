@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Fake kubectl returning canned data, for offline end-to-end tests."""
+import json, sys
+
+args = sys.argv[1:]
+
+def out(obj):
+    print(json.dumps(obj) if not isinstance(obj, str) else obj)
+    sys.exit(0)
+
+def pod(name, phase="Running", ready=True, restarts=0, waiting=None, node="kind-worker"):
+    cs = {"name": "app", "ready": ready, "restartCount": restarts, "state": {}}
+    if waiting:
+        cs["state"] = {"waiting": {"reason": waiting, "message": "back-off"}}
+    return {
+        "metadata": {"name": name, "creationTimestamp": "2026-09-13T00:00:00Z"},
+        "spec": {"nodeName": node},
+        "status": {"phase": phase, "containerStatuses": [cs]},
+    }
+
+if args[0] == "version":
+    out("Client Version: v1.31.1")
+
+if args[0] == "api-resources":
+    out("pods\ndeployments.apps\nevents")
+
+if args[0] == "get":
+    kind = args[1]
+    if kind == "pods":
+        out({"items": [
+            pod("api-7d9f-abcde"),
+            pod("worker-3", phase="Running", ready=False, restarts=7, waiting="CrashLoopBackOff"),
+            pod("redis-cache-0", phase="Pending", ready=False, waiting="ImagePullBackOff", node=None),
+        ]})
+    if kind == "events":
+        out({"items": [
+            {"type": "Warning", "reason": "BackOff", "count": 12,
+             "lastTimestamp": "2026-09-14T01:50:00Z",
+             "involvedObject": {"kind": "Pod", "name": "worker-3"},
+             "message": "Back-off restarting failed container"},
+            {"type": "Warning", "reason": "Failed", "count": 4,
+             "lastTimestamp": "2026-09-14T01:55:00Z",
+             "involvedObject": {"kind": "Pod", "name": "redis-cache-0"},
+             "message": "Failed to pull image redis:doesnotexist"},
+            {"type": "Normal", "reason": "Scheduled", "count": 1,
+             "lastTimestamp": "2026-09-14T01:00:00Z",
+             "involvedObject": {"kind": "Pod", "name": "api-7d9f-abcde"},
+             "message": "Successfully assigned"},
+        ]})
+    if kind == "deployments":
+        out({"items": [{"metadata": {"name": "api"}, "spec": {"replicas": 2},
+                        "status": {"availableReplicas": 1}}]})
+    out({"items": []})
+
+if args[0] == "logs":
+    out("Traceback (most recent call last):\n  File app.py, line 3\nConnectionRefusedError: [Errno 111] redis:6379")
+
+if args[0] == "describe":
+    out("Name: worker-3\nStatus: Running\nLast State: Terminated\n  Reason: Error\n  Exit Code: 1")
+
+sys.exit(1)
